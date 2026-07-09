@@ -501,6 +501,9 @@ export const requiredEndpointPermissionsMap: Partial<
   // Tool exclusions: agent-type read/update permission checked dynamically in handler
   [RouteId.GetAgentToolExclusions]: {},
   [RouteId.UpdateAgentToolExclusions]: {},
+  // Subagent (delegation-target) exclusions: agent-type read/update permission checked dynamically in handler
+  [RouteId.GetAgentSubagentExclusions]: {},
+  [RouteId.UpdateAgentSubagentExclusions]: {},
   [RouteId.GetDefaultMcpGateway]: {
     mcpGateway: ["read"],
   },
