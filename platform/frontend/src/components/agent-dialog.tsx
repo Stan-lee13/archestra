@@ -136,6 +136,10 @@ import {
   useProfile,
   useUpdateProfile,
 } from "@/lib/agent.query";
+import {
+  useAgentSubagentExclusions,
+  useUpdateAgentSubagentExclusions,
+} from "@/lib/agent-subagent-exclusions.query";
 import type { AgentToolExclusions } from "@/lib/agent-tool-exclusions.query";
 import {
   useAgentDelegations,
@@ -247,9 +251,17 @@ interface SubagentPillProps {
   agent: Agent;
   isSelected: boolean;
   onToggle: (agentId: string) => void;
+  // "delegate" pills read as an active delegation target (green); "exclude"
+  // pills read as a target removed from the Auto surface (red).
+  tone?: "delegate" | "exclude";
 }
 
-function SubagentPill({ agent, isSelected, onToggle }: SubagentPillProps) {
+function SubagentPill({
+  agent,
+  isSelected,
+  onToggle,
+  tone = "delegate",
+}: SubagentPillProps) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -265,7 +277,12 @@ function SubagentPill({ agent, isSelected, onToggle }: SubagentPillProps) {
             )}
           >
             {isSelected && (
-              <span className="h-2 w-2 rounded-full bg-green-500 shrink-0" />
+              <span
+                className={cn(
+                  "h-2 w-2 rounded-full shrink-0",
+                  tone === "exclude" ? "bg-red-500" : "bg-green-500",
+                )}
+              />
             )}
             <Bot className="h-3 w-3 shrink-0" />
             <span className="font-medium truncate">{agent.name}</span>
@@ -322,6 +339,11 @@ interface SubagentsEditorProps {
   selectedAgentIds: string[];
   onSelectionChange: (ids: string[]) => void;
   currentAgentId?: string;
+  placeholder?: string;
+  // The "delegate" role offers a shortcut to create a new agent; the "exclude"
+  // (disabled-subagents) role only narrows an existing set, so it omits it.
+  showCreateAction?: boolean;
+  tone?: "delegate" | "exclude";
 }
 
 function SubagentsEditor({
@@ -329,6 +351,9 @@ function SubagentsEditor({
   selectedAgentIds,
   onSelectionChange,
   currentAgentId,
+  placeholder = "Search agents...",
+  showCreateAction = true,
+  tone = "delegate",
 }: SubagentsEditorProps) {
   // Filter out current agent from available agents
   const filteredAgents = availableAgents.filter((a) => a.id !== currentAgentId);
@@ -359,18 +384,23 @@ function SubagentsEditor({
           agent={agent}
           isSelected={true}
           onToggle={handleToggle}
+          tone={tone}
         />
       ))}
       <AssignmentCombobox
         items={comboboxItems}
         selectedIds={selectedAgentIds}
         onToggle={handleToggle}
-        placeholder="Search agents..."
+        placeholder={placeholder}
         emptyMessage="No agents found."
-        createAction={{
-          label: "Create a New Agent",
-          href: "/agents?create=true",
-        }}
+        createAction={
+          showCreateAction
+            ? {
+                label: "Create a New Agent",
+                href: "/agents?create=true",
+              }
+            : undefined
+        }
       />
     </div>
   );
@@ -594,6 +624,13 @@ export function AgentDialog({
   const syncDelegations = useSyncAgentDelegations();
   const { data: currentDelegations = [], isFetched: delegationsFetched } =
     useAgentDelegations(agentType !== "llm_proxy" ? agent?.id : undefined);
+  const syncSubagentExclusions = useUpdateAgentSubagentExclusions();
+  const {
+    data: currentSubagentExclusions,
+    isFetched: subagentExclusionsFetched,
+  } = useAgentSubagentExclusions(
+    agentType !== "llm_proxy" ? agent?.id : undefined,
+  );
   const { data: canReadIdentityProviders } = useHasPermissions({
     identityProvider: ["read"],
   });
@@ -714,6 +751,12 @@ export function AgentDialog({
   // New agents default to Auto mode (implicit access to all tools); editing an
   // existing agent overwrites this from its stored value.
   const [accessAllTools, setAccessAllTools] = useState(true);
+  // Auto subagent mode: new agents default to Auto (may delegate to any agent
+  // the caller can access); editing overwrites this from the stored value.
+  const [accessAllSubagents, setAccessAllSubagents] = useState(true);
+  // Delegation targets excluded from the Auto surface ("Auto All Except Some").
+  // Inert while in Custom subagent mode. Seeded async from the backend.
+  const [disabledSubagentIds, setDisabledSubagentIds] = useState<string[]>([]);
   // Auto-mode exclusions dirty tracking: { initial, current } normalized
   // payloads reported by the exclusions editor (null until it initializes and
   // after it unmounts when the dialog closes).
@@ -823,6 +866,7 @@ export function AgentDialog({
             passthroughHeaders: agentData.passthroughHeaders ?? [],
             toolExposureMode: agentData.toolExposureMode ?? "full",
             accessAllTools: agentData.accessAllTools ?? false,
+            accessAllSubagents: agentData.accessAllSubagents ?? false,
           }
         : {
             name: "",
@@ -850,6 +894,7 @@ export function AgentDialog({
             // admins can switch to "Custom" (explicitly assigned tools).
             toolExposureMode: "full",
             accessAllTools: true,
+            accessAllSubagents: true,
           };
 
       setName(nextValues.name);
@@ -871,12 +916,14 @@ export function AgentDialog({
       setPassthroughHeaders(nextValues.passthroughHeaders);
       setToolExposureMode(nextValues.toolExposureMode);
       setAccessAllTools(nextValues.accessAllTools);
+      setAccessAllSubagents(nextValues.accessAllSubagents);
       setAutoConfigureOnToolDiscovery(nextValues.autoConfigureOnToolDiscovery);
       setDualLlmMaxRounds(nextValues.dualLlmMaxRounds);
       if (!agentData) {
         // Create mode clears delegations here; edit mode syncs them from the
         // loaded agent in a separate effect so refetches don't wipe them.
         setSelectedDelegationTargetIds([]);
+        setDisabledSubagentIds([]);
       }
       initialSnapshotRef.current = buildAgentFormSnapshot(nextValues);
 
@@ -899,6 +946,21 @@ export function AgentDialog({
       );
     }
   }, [open, agentId, currentDelegationIds, delegationsFetched]);
+
+  // Seed the Auto-mode disabled-subagents set once the exclusions load. Kept out
+  // of the agent reset path (same reasoning as delegations above) so a refetch
+  // doesn't wipe pending edits.
+  const currentExcludedSubagentIds = (
+    currentSubagentExclusions?.excludedSubagentIds ?? []
+  ).join(",");
+
+  useEffect(() => {
+    if (open && agentId && subagentExclusionsFetched) {
+      setDisabledSubagentIds(
+        currentExcludedSubagentIds.split(",").filter(Boolean),
+      );
+    }
+  }, [open, agentId, currentExcludedSubagentIds, subagentExclusionsFetched]);
 
   // LLM Configuration: computed values and bidirectional auto-linking
   // (same reactive pattern as prompt input: LlmProviderApiKeySelector + onProviderChange)
@@ -1090,6 +1152,7 @@ export function AgentDialog({
               connectorIds: connectorIds,
               toolExposureMode,
               accessAllTools,
+              accessAllSubagents,
             }),
             teams: assignedTeamIds,
             labels: updatedLabels,
@@ -1138,6 +1201,7 @@ export function AgentDialog({
             connectorIds: connectorIds,
             toolExposureMode,
             accessAllTools,
+            accessAllSubagents,
           }),
           teams: assignedTeamIds,
           labels: updatedLabels,
@@ -1198,6 +1262,15 @@ export function AgentDialog({
         });
       }
 
+      // Persist the Auto-mode disabled-subagents set (full replace; inert in
+      // Custom mode, so it is safe to always write). Skipped for built-ins.
+      if (!isBuiltIn && savedAgentId) {
+        await syncSubagentExclusions.mutateAsync({
+          agentId: savedAgentId,
+          exclusions: { excludedSubagentIds: disabledSubagentIds },
+        });
+      }
+
       // Close dialog on success
       onOpenChange(false);
     } catch (_error) {
@@ -1235,9 +1308,11 @@ export function AgentDialog({
     isAdmin,
     selectedDelegationTargetIds,
     currentDelegations.length,
+    disabledSubagentIds,
     updateAgent,
     createAgent,
     syncDelegations,
+    syncSubagentExclusions,
     onCreated,
     onOpenChange,
     supportsIdentityProvider,
@@ -1245,6 +1320,7 @@ export function AgentDialog({
     deleteAgent,
     toolExposureMode,
     accessAllTools,
+    accessAllSubagents,
     supportsEnvironment,
   ]);
 
@@ -1274,6 +1350,7 @@ export function AgentDialog({
     passthroughHeaders,
     toolExposureMode,
     accessAllTools,
+    accessAllSubagents,
   });
   const isDirty =
     !readOnly &&
@@ -1282,6 +1359,12 @@ export function AgentDialog({
       hasUnsavedChanges(
         [...currentDelegations.map((delegate) => delegate.id)].sort(),
         [...selectedDelegationTargetIds].sort(),
+      ) ||
+      // Disabled subagents load async, so they're diffed against the fetched
+      // baseline (same pattern as delegations above).
+      hasUnsavedChanges(
+        [...(currentSubagentExclusions?.excludedSubagentIds ?? [])].sort(),
+        [...disabledSubagentIds].sort(),
       ) ||
       // Auto-mode exclusions load async, so they're diffed against the
       // baseline the editor reports (same pattern as delegations above)
@@ -2059,15 +2142,65 @@ export function AgentDialog({
 
                     {/* Subagents */}
                     <div className="space-y-2">
-                      <Label>
-                        Subagents ({selectedDelegationTargetIds.length})
-                      </Label>
-                      <SubagentsEditor
-                        availableAgents={allInternalAgents}
-                        selectedAgentIds={selectedDelegationTargetIds}
-                        onSelectionChange={setSelectedDelegationTargetIds}
-                        currentAgentId={agent?.id}
-                      />
+                      <Label>Subagents</Label>
+                      <Tabs
+                        value={accessAllSubagents ? "auto" : "custom"}
+                        onValueChange={(value) =>
+                          setAccessAllSubagents(value === "auto")
+                        }
+                      >
+                        <TabsList className="grid w-full grid-cols-2">
+                          <TabsTrigger value="auto">Auto</TabsTrigger>
+                          <TabsTrigger value="custom">Custom</TabsTrigger>
+                        </TabsList>
+                      </Tabs>
+                      {accessAllSubagents ? (
+                        <div className="space-y-2">
+                          <ul className="space-y-1.5 pt-1 text-xs text-muted-foreground">
+                            <li className="flex gap-2">
+                              <CheckIcon className="mt-px size-3.5 shrink-0" />
+                              Can delegate to any agent the calling user can
+                              access — new agents included automatically
+                            </li>
+                            <li className="flex gap-2">
+                              <CheckIcon className="mt-px size-3.5 shrink-0" />
+                              Disable specific agents below to keep them off the
+                              delegation surface
+                            </li>
+                          </ul>
+                          <div className="space-y-1.5">
+                            <p className="text-xs text-muted-foreground">
+                              Disabled subagents ({disabledSubagentIds.length})
+                            </p>
+                            <SubagentsEditor
+                              availableAgents={allInternalAgents}
+                              selectedAgentIds={disabledSubagentIds}
+                              onSelectionChange={setDisabledSubagentIds}
+                              currentAgentId={agent?.id}
+                              placeholder="Search agents to disable..."
+                              showCreateAction={false}
+                              tone="exclude"
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <p className="pt-1 text-xs text-muted-foreground">
+                            Only the subagents you assign below can be delegated
+                            to by this{" "}
+                            {agentTypeDisplayName[agentType] || "agent"}.
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Subagents ({selectedDelegationTargetIds.length})
+                          </p>
+                          <SubagentsEditor
+                            availableAgents={allInternalAgents}
+                            selectedAgentIds={selectedDelegationTargetIds}
+                            onSelectionChange={setSelectedDelegationTargetIds}
+                            currentAgentId={agent?.id}
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2495,6 +2628,7 @@ type AgentFormFields = {
   passthroughHeaders: string[];
   toolExposureMode: ToolExposureMode;
   accessAllTools: boolean;
+  accessAllSubagents: boolean;
 };
 
 // Normalizes set-like id arrays (order-independent) so reselecting the same
