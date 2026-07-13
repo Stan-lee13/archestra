@@ -664,6 +664,13 @@ export interface PermissionSyncParams {
    * these top-level containers (the probe's dirty set). Absent on full passes.
    */
   scope?: { containerKeys: string[] };
+  /**
+   * True on full reconcile passes (manual + periodic backstop): cross-pass
+   * identity caches are bypassed on read and rewritten, so an upstream
+   * email/profile change (e.g. a member making their GitHub email public)
+   * lands on the next full pass instead of waiting out the cache TTL.
+   */
+  refreshIdentities?: boolean;
 }
 
 /**

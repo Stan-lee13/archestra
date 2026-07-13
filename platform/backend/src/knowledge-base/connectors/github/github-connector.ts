@@ -544,7 +544,11 @@ export class GithubConnector extends BaseConnector {
       throw new Error("Invalid GitHub configuration for permission sync");
     }
     const octokit = await createOctokit(config, params.credentials, this.log);
-    this.initPersistentProfileCache(config, params.credentials);
+    this.initPersistentProfileCache(
+      config,
+      params.credentials,
+      params.refreshIdentities,
+    );
     this.resolveMappedEmail = params.resolveMappedEmail ?? null;
     const repos = await getRepos(octokit, config);
     // Stable codepoint order so the resume cursor (a container key) is
@@ -618,7 +622,11 @@ export class GithubConnector extends BaseConnector {
       throw new Error("Invalid GitHub configuration for permission sync");
     }
     const octokit = await createOctokit(config, params.credentials, this.log);
-    this.initPersistentProfileCache(config, params.credentials);
+    this.initPersistentProfileCache(
+      config,
+      params.credentials,
+      params.refreshIdentities,
+    );
     const repos = await getRepos(octokit, config);
     const orgs = [...new Set(repos.map((repo) => repo.owner))].sort();
 
@@ -784,11 +792,13 @@ export class GithubConnector extends BaseConnector {
   private initPersistentProfileCache(
     config: GithubConfig,
     credentials: ConnectorCredentials,
+    refresh?: boolean,
   ): void {
     this.persistentProfileCache = new ConnectorIdentityCache({
       namespace: "github-profile",
       host: resolveGithubApiUrl(config, credentials),
       credentials,
+      refresh,
     });
   }
 

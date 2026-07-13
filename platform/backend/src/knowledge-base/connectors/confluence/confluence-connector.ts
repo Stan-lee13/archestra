@@ -400,7 +400,11 @@ export class ConfluenceConnector extends BaseConnector {
       throw new Error("Invalid Confluence configuration for permission sync");
     }
     const client = createConfluenceClient(config, params.credentials, this.log);
-    this.initAdminEmailResolver(config, params.credentials);
+    this.initAdminEmailResolver(
+      config,
+      params.credentials,
+      params.refreshIdentities,
+    );
     this.resolveMappedEmail = params.resolveMappedEmail ?? null;
 
     const scope = params.scope ? new Set(params.scope.containerKeys) : null;
@@ -643,7 +647,11 @@ export class ConfluenceConnector extends BaseConnector {
       throw new Error("Invalid Confluence configuration for permission sync");
     }
     const client = createConfluenceClient(config, params.credentials, this.log);
-    this.initAdminEmailResolver(config, params.credentials);
+    this.initAdminEmailResolver(
+      config,
+      params.credentials,
+      params.refreshIdentities,
+    );
 
     // Accumulate every member across all real groups so the synthetic
     // "any logged-in user" group (emitted last) can grant a doc readable by all
@@ -1146,6 +1154,7 @@ export class ConfluenceConnector extends BaseConnector {
   private initAdminEmailResolver(
     config: ConfluenceConfig,
     credentials: ConnectorCredentials,
+    refresh?: boolean,
   ): void {
     // The dedicated org-admin API key unlocks the admin APIs; the product
     // apiToken is only a long-shot fallback bearer (the admin APIs reject
@@ -1164,6 +1173,7 @@ export class ConfluenceConnector extends BaseConnector {
       namespace: "confluence-email",
       host: config.confluenceUrl,
       credentials,
+      refresh,
     });
   }
 

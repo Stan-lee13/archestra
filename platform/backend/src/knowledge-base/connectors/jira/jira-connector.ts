@@ -397,7 +397,11 @@ export class JiraConnector extends BaseConnector {
     const client: any = config.isCloud
       ? createV3Client(config, params.credentials, this.log)
       : createV2Client(config, params.credentials, this.log);
-    this.initAdminEmailResolver(config, params.credentials);
+    this.initAdminEmailResolver(
+      config,
+      params.credentials,
+      params.refreshIdentities,
+    );
 
     this.resolveMappedEmail = params.resolveMappedEmail ?? null;
 
@@ -751,7 +755,11 @@ export class JiraConnector extends BaseConnector {
     const client: any = config.isCloud
       ? createV3Client(config, params.credentials, this.log)
       : createV2Client(config, params.credentials, this.log);
-    this.initAdminEmailResolver(config, params.credentials);
+    this.initAdminEmailResolver(
+      config,
+      params.credentials,
+      params.refreshIdentities,
+    );
 
     let startAt = 0;
     for (;;) {
@@ -1221,6 +1229,7 @@ export class JiraConnector extends BaseConnector {
   private initAdminEmailResolver(
     config: JiraConfig,
     credentials: ConnectorCredentials,
+    refresh?: boolean,
   ): void {
     // The dedicated org-admin API key unlocks the admin APIs; the product
     // apiToken is only a long-shot fallback bearer (the admin APIs reject
@@ -1239,6 +1248,7 @@ export class JiraConnector extends BaseConnector {
       namespace: "jira-email",
       host: config.jiraBaseUrl,
       credentials,
+      refresh,
     });
   }
 }
