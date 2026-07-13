@@ -1,4 +1,5 @@
 import {
+  bigint,
   index,
   integer,
   jsonb,
@@ -27,6 +28,21 @@ const kbDocumentsTable = pgTable(
     contentHash: text("content_hash").notNull(),
     sourceUrl: text("source_url"),
     acl: jsonb("acl").$type<string[]>().notNull().default([]),
+    // Generation stamp written by the permission-sync pass's generation-gated
+    // full reconcile. Each run enumerates upstream under a fresh generation `G`
+    // and stamps every document it (re)tags with `G`; only after `G` enumerates
+    // end-to-end does the pass fail-close (acl=[]) documents left at a prior
+    // generation. Unindexed / HOT-friendly (a narrow bigint, not the wide GIN
+    // `acl` column). NULL = never touched by a permission pass.
+    aclSyncGeneration: bigint("acl_sync_generation", { mode: "number" }),
+    /**
+     * Upstream permission container this document was last assigned to by the
+     * permission-sync pass (matches `kb_container_acls.container_key`, e.g.
+     * `space:DEV` or `space:DEV/page:12345`). Bookkeeping only — access flows
+     * through the `container:` token in `acl`. NULL = not yet assigned
+     * (fail-closed until the next pass) or a non-auto-sync connector.
+     */
+    containerKey: text("container_key"),
     metadata: jsonb("metadata").$type<KbDocumentMetadata>().default({}),
     embeddingStatus: text("embedding_status")
       .$type<EmbeddingStatus>()
@@ -44,6 +60,12 @@ const kbDocumentsTable = pgTable(
     uniqueIndex("kb_documents_source_idx").on(
       table.connectorId,
       table.sourceId,
+    ),
+    // Serves the pass's per-container document scans (adopt/reassign/
+    // fail-close set-diffs), including prefix ranges over nested containers.
+    index("kb_documents_container_idx").on(
+      table.connectorId,
+      table.containerKey,
     ),
   ],
 );

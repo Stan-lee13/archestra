@@ -494,10 +494,11 @@ describe("KbDocumentModel", () => {
         }),
       );
 
-      const updatedCount = await KbDocumentModel.updateAclByConnector(
-        targetConnector.id,
-        ["team:alpha"],
-      );
+      const updatedCount = await KbDocumentModel.updateAclByConnector({
+        connectorId: targetConnector.id,
+        acl: ["team:alpha"],
+        aclConfigEpoch: targetConnector.aclConfigEpoch,
+      });
 
       expect(updatedCount).toBe(1);
       expect((await KbDocumentModel.findById(unchangedDoc.id))?.acl).toEqual([

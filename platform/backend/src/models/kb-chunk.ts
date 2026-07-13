@@ -48,20 +48,65 @@ class KbChunkModel {
     return result?.count ?? 0;
   }
 
-  static async updateAclByConnector(
-    connectorId: string,
-    acl: AclEntry[],
-  ): Promise<number> {
-    // Skip rows that already have the target ACL to avoid unnecessary rewrites,
-    // WAL churn, and vacuum work when connector visibility is re-applied.
+  /**
+   * Bulk-apply a connector-level ACL to every chunk (org-wide / team-scoped
+   * connectors, via `refreshConnectorDocumentAccessControlLists`). Epoch-fenced
+   * like the document-level variant: a stale-epoch write (concurrent visibility
+   * change) no-ops. Rows already at the target ACL are skipped.
+   */
+  static async updateAclByConnector(params: {
+    connectorId: string;
+    acl: AclEntry[];
+    aclConfigEpoch: number;
+  }): Promise<number> {
+    const aclJson = JSON.stringify(params.acl);
     const result = await db.execute(sql`
       WITH updated AS (
         UPDATE ${schema.kbChunksTable} AS chunk
-        SET acl = ${JSON.stringify(acl)}::jsonb
+        SET acl = ${aclJson}::jsonb
         FROM ${schema.kbDocumentsTable} AS document
+        JOIN ${schema.knowledgeBaseConnectorsTable} AS connector
+          ON connector.id = document.connector_id
         WHERE chunk.document_id = document.id
-          AND document.connector_id = ${connectorId}
-          AND chunk.acl IS DISTINCT FROM ${JSON.stringify(acl)}::jsonb
+          AND document.connector_id = ${params.connectorId}
+          AND connector.acl_config_epoch = ${params.aclConfigEpoch}
+          AND chunk.acl IS DISTINCT FROM ${aclJson}::jsonb
+        RETURNING 1
+      )
+      SELECT COUNT(*)::int AS count FROM updated
+    `);
+
+    const count = result.rows[0]?.count;
+    return typeof count === "number" ? count : Number(count ?? 0);
+  }
+
+  /**
+   * Rewrite a single document's chunk ACLs in one statement (permission-sync
+   * pass, `auto-sync-permissions` connectors). Fenced on the connector's
+   * `acl_config_epoch`: if visibility/teamIds changed since the ACL was computed
+   * (epoch bumped), the write no-ops. Rows already at the target ACL are skipped
+   * to avoid needless GIN churn. This is the wide, O(changed) write — only
+   * called for documents whose ACL actually changed. Returns the rows rewritten.
+   */
+  static async updateAclByDocument(params: {
+    documentId: string;
+    acl: AclEntry[];
+    connectorId: string;
+    aclConfigEpoch: number;
+  }): Promise<number> {
+    const aclJson = JSON.stringify(params.acl);
+    const result = await db.execute(sql`
+      WITH updated AS (
+        UPDATE ${schema.kbChunksTable} AS chunk
+        SET acl = ${aclJson}::jsonb
+        FROM ${schema.kbDocumentsTable} AS document
+        JOIN ${schema.knowledgeBaseConnectorsTable} AS connector
+          ON connector.id = document.connector_id
+        WHERE chunk.document_id = document.id
+          AND document.id = ${params.documentId}
+          AND document.connector_id = ${params.connectorId}
+          AND connector.acl_config_epoch = ${params.aclConfigEpoch}
+          AND chunk.acl IS DISTINCT FROM ${aclJson}::jsonb
         RETURNING 1
       )
       SELECT COUNT(*)::int AS count FROM updated
